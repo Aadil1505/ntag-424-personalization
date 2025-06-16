@@ -1,0 +1,29 @@
+{
+  "name": "ntag-424-personalization",
+  "version": "1.0.0",
+  "description": "RESTful API for NTAG424 DNA personalization",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aadil1505/ntag-424-personalization.git"
+  },
+  "author": "Aadil Alli",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Aadil1505/ntag-424-personalization/issues"
+  },
+  "homepage": "https://github.com/Aadil1505/ntag-424-personalization#readme",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "crc": "^4.3.2",
+    "debug": "^4.4.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "ndef": "^0.2.0",
+    "nfc-pcsc": "^0.8.1",
+    "node-aes-cmac": "^0.1.1"
+  }
+}
