@@ -5,7 +5,7 @@ This is a Node.js API server for personalizing and configuring NTAG424 NFC tags.
 ## Requirements
 
 - Node.js 18 (required for compatibility with the NFC libraries)
-- NFC Reader (e.g., ACS ACR122U)
+- NFC Reader (e.g., ACS ACR1252U)
 - NTAG424 DNA tags
 
 ## Installation
