@@ -55,13 +55,6 @@ DEBUG=NTAG424:*
 ### Card Operations
 
 - `GET /card/uid`: Get the UID of the card currently presented to the reader
-- `GET /card/ndef`: Read NDEF data from the card
-- `POST /card/ndef`: Write NDEF data to the card
-  ```json
-  {
-    "url": "http://10.25.130.96:3000/verification?uid={uid}&ctr={counter}&cmac={cmac}"
-  }
-  ```
 - `GET /card/settings`: Get the current file settings of the card
 - `POST /card/personalize`: Personalize a tag with a URL and secure settings (working example with SDM Backend)
   ```json
