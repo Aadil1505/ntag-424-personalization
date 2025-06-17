@@ -111,7 +111,7 @@ This will use the default URL format. You can also specify a custom URL if neede
 
 ```bash
 curl -X POST \
-  http://localhost:3002/card/personalize \
+  http://localhost:3000/card/personalize \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://sdm.nfcdeveloper.com/tagpt?uid={uid}&ctr={counter}&cmac={cmac}"}'
 ```
