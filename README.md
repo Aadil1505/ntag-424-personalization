@@ -12,8 +12,8 @@ This is a Node.js API server for personalizing and configuring NTAG424 NFC tags.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Aadil1505/Authlink-NFC-Node-Backend
-   cd authlink-nfc-node-backend
+   git clone https://github.com/Aadil1505/ntag-424-personalization.git
+   cd ntag-424-personalization
    ```
 
 2. Install dependencies:
