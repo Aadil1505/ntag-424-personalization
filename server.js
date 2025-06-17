@@ -840,8 +840,8 @@ app.post('/card/personalize', async (req, res) => {
   
   if (!url) {
     // Default URL pattern with parameters for verification
-    const baseUrl = req.body.baseUrl || 'http://example.com';
-    url = `${baseUrl}/verification?uid={uid}&ctr={counter}&cmac={cmac}`;
+    const baseUrl = req.body.baseUrl || 'https://sdm.nfcdeveloper.com';
+    url = `${baseUrl}/tagpt?uid={uid}&ctr={counter}&cmac={cmac}`;
   }
   
   if (!MASTER_KEY_HEX) {

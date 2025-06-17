@@ -68,7 +68,7 @@ DEBUG=NTAG424:*
 The server writes NDEF records with the following default URL format:
 
 ```
-http://10.25.130.96:3000/verification?uid={uid}&ctr={counter}&cmac={cmac}
+https://sdm.nfcdeveloper.com/tagpt?uid={uid}&ctr={counter}&cmac={cmac}
 ```
 
 Where:
