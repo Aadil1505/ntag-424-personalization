@@ -843,7 +843,7 @@ class NFCOperations {
         }
       } else if (compareFileSettings(fileSettings, newSettings) !== 0) {
         // Update file settings if needed
-        keyNo = parseInt(parsed.FileAR.Change, HEX);
+        const keyNo = parseInt(parsed.FileAR.Change, HEX);
         if (keyNo !== 0xE && this.commMode !== CommMode.FULL) {
           auth = await this.authenticate(keyNo);
         }
@@ -853,6 +853,7 @@ class NFCOperations {
       return {
         success: true,
         uid: formatUid(UID),
+        url: url,
         isFactory: factory,
         message: factory ? "Tag personalized with new keys and settings" : "Tag updated with new settings"
       };
@@ -921,6 +922,53 @@ app.get('/card/settings', async (req, res) => {
     });
   } catch (error) {
     console.error('Error getting file settings:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    nfcLock.release();
+  }
+});
+
+// Read tag and extract URL
+app.get('/card/read', async (req, res) => {
+  if (!isReaderReady) {
+    return res.status(503).json({ error: 'NFC reader not ready' });
+  }
+
+  if (!currentCard) {
+    return res.status(404).json({ error: 'No card detected' });
+  }
+
+  await nfcLock.acquire();
+  try {
+    const nfcOps = new NFCOperations(nfcReader);
+
+    // Get UID
+    const uid = await nfcOps.getUid();
+
+    // First select NDEF application
+    await nfcOps.send(wrap(0x00, 0xa4, 0x04, 0x0c, ndefAid), "select app");
+
+    // Read NDEF message
+    const { ndef, decoded } = await nfcOps.readNdef();
+
+    // Get file settings
+    const settings = await nfcOps.getFileSettings();
+    const parsed = parseSettings(settings);
+
+    const response = {
+      uid: formatUid(uid),
+      url: decoded?.value || null,
+      ndefRaw: ndef.toString('hex'),
+      settings: parsed
+    };
+
+    if (!decoded?.value) {
+      response.warning = 'No URL found in NDEF message';
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error reading tag:', error);
     res.status(500).json({ error: error.message });
   } finally {
     nfcLock.release();
