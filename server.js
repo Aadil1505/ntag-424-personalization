@@ -22,10 +22,46 @@ const {
 const app = express();
 app.use(bodyParser.json());
 
+// Serve static files from the public directory
+app.use(express.static('public'));
+
 // Configuration
 const PORT = process.env.PORT || 3000;
 const { MASTER_KEY_HEX, CL_READER } = process.env;
-let masterKey = Buffer.from(MASTER_KEY_HEX || '', 'hex');
+
+// Validate master key configuration
+function validateMasterKey(keyHex) {
+  if (!keyHex) {
+    console.error('CRITICAL ERROR: MASTER_KEY_HEX environment variable is not set!');
+    console.error('This would cause all tags to use insecure default keys.');
+    console.error('Please set a 32-character hexadecimal master key in your .env file.');
+    return null;
+  }
+
+  if (!/^[0-9A-Fa-f]{32}$/.test(keyHex)) {
+    console.error('CRITICAL ERROR: MASTER_KEY_HEX must be exactly 32 hexadecimal characters (16 bytes)');
+    console.error(`Received: "${keyHex}" (${keyHex.length} characters)`);
+    return null;
+  }
+
+  const key = Buffer.from(keyHex, 'hex');
+
+  // Check if key is all zeros (insecure)
+  if (key.every(byte => byte === 0)) {
+    console.warn('WARNING: Master key is all zeros. This is insecure and should only be used for testing.');
+    console.warn('Please generate a secure random key: node -e "console.log(require(\'crypto\').randomBytes(16).toString(\'hex\'))"');
+  }
+
+  return key;
+}
+
+const masterKey = validateMasterKey(MASTER_KEY_HEX);
+if (!masterKey) {
+  console.error('\nServer cannot start without a valid master key.');
+  console.error('Generate one with: node -e "console.log(require(\'crypto\').randomBytes(16).toString(\'hex\'))"');
+  console.error('Then add to .env: MASTER_KEY_HEX=<your-generated-key>\n');
+  process.exit(1);
+}
 
 // Format UID to uppercase
 function formatUid(uid) {
@@ -82,6 +118,36 @@ let isReaderReady = false;
 let lastError = null;
 let lastScanResult = null;
 let currentCard = null;
+
+// Request locking mechanism to prevent concurrent NFC operations
+class AsyncLock {
+  constructor() {
+    this.locked = false;
+    this.queue = [];
+  }
+
+  async acquire() {
+    return new Promise((resolve) => {
+      if (!this.locked) {
+        this.locked = true;
+        resolve();
+      } else {
+        this.queue.push(resolve);
+      }
+    });
+  }
+
+  release() {
+    if (this.queue.length > 0) {
+      const resolve = this.queue.shift();
+      resolve();
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
+const nfcLock = new AsyncLock();
 
 // Initialize NFC
 const nfc = new NFC();
@@ -255,7 +321,10 @@ function generateFileSettings(offsets, FileAR = {Read: 0xe, Write: 0xe, ReadWrit
     SDMReadCtrLimit,
     SDMENCFileData,
     SDMMACInputOffset,
-    SDMMACOffset
+    SDMMACOffset,
+    PICCDataOffset,
+    SDMENCOffset,
+    SDMENCLength
   } = offsets;
 
   // Allow hex string values
@@ -348,18 +417,28 @@ function wrap(CLA = 0x00, ins, p1 = 0, p2 = 0, dataIn) {
 }
 
 function deriveTagKey(masterKey, uid, keyNo) {
-  // If using all zeros master key, return all zeros
-  if (masterKey.every(byte => byte === 0)) {
+  // Validate inputs
+  if (!masterKey || masterKey.length === 0) {
+    throw new Error('Master key is empty or invalid. Cannot derive tag keys.');
+  }
+
+  if (!uid || uid.length === 0) {
+    throw new Error('UID is empty or invalid. Cannot derive tag keys.');
+  }
+
+  // If using all zeros master key, return all zeros (for testing/factory mode only)
+  if (masterKey.length === 16 && masterKey.every(byte => byte === 0)) {
+    console.warn('WARNING: Deriving keys from all-zero master key. This is insecure!');
     return Buffer.alloc(16).fill(0);
   }
-  
+
   // Create the input for PBKDF2
   const salt = Buffer.concat([
-    Buffer.from("key"), 
-    uid, 
+    Buffer.from("key"),
+    uid,
     Buffer.from([keyNo])
   ]);
-  
+
   // Use crypto.pbkdf2Sync to match the Python implementation
   return crypto.pbkdf2Sync(masterKey, salt, 5000, 16, 'sha512');
 }
@@ -467,10 +546,12 @@ class NFCOperations {
 
   async authenticate(keyNo) {
     const LenCap = 0x00;
-    const key = keyNo === 'factory' ? factoryKey : this.keys[keyNo];
+    const isFactory = keyNo === 'factory';
+    const key = isFactory ? factoryKey : this.keys[keyNo];
+    const actualKeyNo = isFactory ? 0 : keyNo;
 
     const res1 = await this.send(
-      wrap(0x90, 0x71, 0x00, 0x00, [keyNo, LenCap]),
+      wrap(0x90, 0x71, 0x00, 0x00, [actualKeyNo, LenCap]),
       "authenticate"
     );
 
@@ -506,7 +587,7 @@ class NFCOperations {
     }
     this.cmdCtr = 0; // I think this gets reset with authentication
     this.commMode = CommMode.FULL;
-    console.log('authenticated using keyNo', keyNo);
+    console.log('authenticated using keyNo', actualKeyNo, isFactory ? '(factory key)' : '');
 
     const { SesAuthENC, SesAuthMAC } = calcSessionKeys(key, RndA, RndB);
     return { TI, SesAuthENC, SesAuthMAC };
@@ -537,7 +618,7 @@ class NFCOperations {
       ])
     } else {
       const keyXor = Buffer.alloc(0x10).fill(0);
-      for (var i = 0; i < 0x10; i++) {
+      for (let i = 0; i < 0x10; i++) {
         keyXor[i] = newKey[i] ^ oldKey[i];
       }
       const crc32 = crcjam(newKey);
@@ -671,7 +752,7 @@ class NFCOperations {
       const UID = await this.getUid();
       
       // Derive keys from master key and UID
-      for (var i = 0; i < 5; i++) {
+      for (let i = 0; i < 5; i++) {
         this.keys[i] = deriveTagKey(masterKey, UID, i);
       }
       log.keys({ keys: this.keys });
@@ -723,7 +804,7 @@ class NFCOperations {
           await this.changeKey(0, this.keys[0], auth);
           auth = await this.authenticate(0);
 
-          for (var i = 1; i < 5; i++) {
+          for (let i = 1; i < 5; i++) {
             const newKey = this.keys[i];
             await this.changeKey(i, newKey, auth);
           }
@@ -732,8 +813,9 @@ class NFCOperations {
           // Set file settings
           try {
             const exampleFileSettings = Buffer.from('40EEEEC1F121200000430000430000', 'hex');
+            // Re-authenticate with key 0 if needed (should already be authenticated from key changes above)
             if (this.commMode !== CommMode.FULL) {
-              auth = await this.authenticate('factory');
+              auth = await this.authenticate(0);
             }
             await this.setFileSettings(exampleFileSettings, auth);
             this.commMode = CommMode.PLAIN;
@@ -774,7 +856,8 @@ app.get('/status', (req, res) => {
     isReaderReady,
     reader: nfcReader ? nfcReader.reader.name : null,
     lastError,
-    masterKeyConfigured: !!MASTER_KEY_HEX,
+    masterKeyConfigured: !!masterKey && masterKey.length === 16,
+    masterKeyIsSecure: masterKey && !masterKey.every(byte => byte === 0),
     readerConfigured: !!CL_READER
   });
 });
@@ -784,11 +867,12 @@ app.get('/card/uid', async (req, res) => {
   if (!isReaderReady) {
     return res.status(503).json({ error: 'NFC reader not ready' });
   }
-  
+
   if (!currentCard) {
     return res.status(404).json({ error: 'No card detected' });
   }
-  
+
+  await nfcLock.acquire();
   try {
     const nfcOps = new NFCOperations(nfcReader);
     const uid = await nfcOps.getUid();
@@ -796,6 +880,8 @@ app.get('/card/uid', async (req, res) => {
   } catch (error) {
     console.error('Error reading UID:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    nfcLock.release();
   }
 });
 
@@ -804,11 +890,12 @@ app.get('/card/settings', async (req, res) => {
   if (!isReaderReady) {
     return res.status(503).json({ error: 'NFC reader not ready' });
   }
-  
+
   if (!currentCard) {
     return res.status(404).json({ error: 'No card detected' });
   }
-  
+
+  await nfcLock.acquire();
   try {
     const nfcOps = new NFCOperations(nfcReader);
     // First select NDEF application
@@ -822,6 +909,8 @@ app.get('/card/settings', async (req, res) => {
   } catch (error) {
     console.error('Error getting file settings:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    nfcLock.release();
   }
 });
 
@@ -830,24 +919,25 @@ app.post('/card/personalize', async (req, res) => {
   if (!isReaderReady) {
     return res.status(503).json({ error: 'NFC reader not ready' });
   }
-  
+
   if (!currentCard) {
     return res.status(404).json({ error: 'No card detected' });
   }
-  
+
   // Use the provided URL or default to the verification URL format
   let { url } = req.body;
-  
+
   if (!url) {
     // Default URL pattern with parameters for verification
     const baseUrl = req.body.baseUrl || 'https://sdm.nfcdeveloper.com';
     url = `${baseUrl}/tagpt?uid={uid}&ctr={counter}&cmac={cmac}`;
   }
-  
+
   if (!MASTER_KEY_HEX) {
     return res.status(400).json({ error: 'Master key not configured' });
   }
-  
+
+  await nfcLock.acquire();
   try {
     const nfcOps = new NFCOperations(nfcReader);
     const result = await nfcOps.personalize(url);
@@ -855,6 +945,8 @@ app.post('/card/personalize', async (req, res) => {
   } catch (error) {
     console.error('Error personalizing tag:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    nfcLock.release();
   }
 });
 

@@ -6,7 +6,7 @@ const cipher = "aes-128-cbc";
 
 function calcSessionKeys(key, RndA, RndB) {
   const xor = Buffer.alloc(6);
-  for (var i = 0; i < 6; i++) {
+  for (let i = 0; i < 6; i++) {
     xor[i] = RndA[2 + i] ^ RndB[i];
   }
 
@@ -32,33 +32,52 @@ function calcSessionKeys(key, RndA, RndB) {
   return { SesAuthENC, SesAuthMAC };
 }
 
-function decrypt(key, data) {
+function decrypt(key, data, iv = Buffer.alloc(blockSize).fill(0)) {
   const decipher = crypto.createDecipheriv(
     cipher,
     key,
-    Buffer.alloc(blockSize)
+    iv
   );
   decipher.setAutoPadding(false);
-  const padLen = blockSize - (data.length % blockSize);
-  if (padLen !== blockSize) {
-    data = Buffer.concat([data, Buffer.alloc(padLen).fill(0x80)]);
+
+  // Encrypted data should already be block-aligned
+  if (data.length % blockSize !== 0) {
+    throw new Error(`Encrypted data length (${data.length}) is not a multiple of block size (${blockSize})`);
   }
 
-  return Buffer.concat([decipher.update(data), decipher.final()]);
+  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+
+  // Remove ISO/IEC 9797-1 padding method 2: find 0x80 byte, remove it and everything after
+  // Work backwards from the end to find the 0x80 marker
+  let unpaddedLength = decrypted.length;
+  for (let i = decrypted.length - 1; i >= 0; i--) {
+    if (decrypted[i] === 0x80) {
+      unpaddedLength = i;
+      break;
+    }
+    if (decrypted[i] !== 0x00) {
+      // No valid padding found - return as is
+      return decrypted;
+    }
+  }
+
+  return decrypted.slice(0, unpaddedLength);
 }
 
 function encrypt(key, data, iv = Buffer.alloc(blockSize).fill(0)) {
-  const decipher = crypto.createCipheriv(cipher, key, iv);
-  decipher.setAutoPadding(false);
-  const padLen = blockSize - (data.length % blockSize);
-  // Do I always need to add at least on 0x80?
-  // https://github.com/icedevml/nfc-ev2-crypto/blob/master/comm.py#L218
+  const cipher = crypto.createCipheriv("aes-128-cbc", key, iv);
+  cipher.setAutoPadding(false);
 
+  // ISO/IEC 9797-1 padding method 2 (also known as ISO/IEC 7816-4 padding)
+  // Add 0x80 byte followed by 0x00 bytes to reach block boundary
+  const padLen = blockSize - (data.length % blockSize);
   if (padLen !== blockSize) {
-    data = Buffer.concat([data, Buffer.alloc(padLen).fill(0x80)]);
+    const padding = Buffer.alloc(padLen);
+    padding[0] = 0x80;  // First byte is 0x80, rest are 0x00 (already initialized)
+    data = Buffer.concat([data, padding]);
   }
 
-  return Buffer.concat([decipher.update(data), decipher.final()]);
+  return Buffer.concat([cipher.update(data), cipher.final()]);
 }
 
 function MAC(key, data) {
@@ -67,7 +86,7 @@ function MAC(key, data) {
 
 function MACt(mac) {
   const mact = Buffer.alloc(8);
-  for (var i = 0; i < mac.length; i++) {
+  for (let i = 0; i < mac.length; i++) {
     if (i % 2 == 1) {
       mact[(i / 2) >>> 0] = mac[i];
     }
