@@ -750,7 +750,7 @@ class NFCOperations {
     try {
       // Get UID
       const UID = await this.getUid();
-      
+
       // Derive keys from master key and UID
       for (let i = 0; i < 5; i++) {
         this.keys[i] = deriveTagKey(masterKey, UID, i);
@@ -759,7 +759,7 @@ class NFCOperations {
 
       // Select NDEF application
       let res = await this.send(wrap(0x00, 0xa4, 0x04, 0x0c, ndefAid), "select app");
-      
+
       // Get current file settings
       let fileSettings = await this.getFileSettings();
       const parsed = parseSettings(fileSettings);
@@ -768,23 +768,36 @@ class NFCOperations {
       // Generate new NDEF message
       const { ndef, ...offsets } = generateNDEF(url);
 
-      // Try to write NDEF if permissions allow
-      let keyNo = parseInt(parsed.FileAR.Write, HEX);
-      if (keyNo === 0xe) {
-        await this.writeNdef(ndef);
-      }
-
-      // Read current NDEF
+      // Read current NDEF to check if update is needed
       const { ndef: currentNdef } = await this.readNdef();
 
-      // If NDEF needs to be updated
-      if (compareNdef(currentNdef, ndef, parsed) !== 0) {
-        keyNo = parseInt(parsed.FileAR.Write, HEX);
-        if (keyNo === 0x0e) {
+      // Check if NDEF needs to be updated
+      const ndefNeedsUpdate = compareNdef(currentNdef, ndef, parsed) !== 0;
+
+      // IMPORTANT: Write NDEF before locking down file settings
+      // Factory tags have free write access (0xE), allowing us to write NDEF
+      // before we lock write access to Key 0 in the file settings below
+      if (ndefNeedsUpdate) {
+        const writeKeyNo = parseInt(parsed.FileAR.Write, HEX);
+
+        if (writeKeyNo === 0xe) {
+          // Free write access - no authentication needed
+          console.log('Writing NDEF with free access');
           await this.writeNdef(ndef);
+        } else if (writeKeyNo >= 0 && writeKeyNo <= 4) {
+          // Requires authentication with specific key
+          console.log(`NDEF write requires authentication with key ${writeKeyNo}`);
+          // Note: writeNdef currently only supports CommMode.PLAIN
+          // For now, this will be handled during factory personalization
+          // where we'll write NDEF before locking down write access
+          console.warn('WARNING: Authenticated NDEF writes not yet implemented');
+          console.warn('NDEF write will be skipped - ensure NDEF is written before locking write access');
         } else {
-          console.log('skipping ndef write', { keyNo });
+          // Access denied (0xf) or invalid
+          console.warn(`Cannot write NDEF: access denied (write key: 0x${writeKeyNo.toString(16)})`);
         }
+      } else {
+        console.log('NDEF is already up to date, skipping write');
       }
 
       // Generate new file settings
